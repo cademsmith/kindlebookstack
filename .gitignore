@@ -1,5 +1,7 @@
 # Never commit real secrets or local data
 .env
+.env.*
+!.env.*.example
 data/
 books/
 
