@@ -1,0 +1,72 @@
+# BookOrbit — self-hosted library for ebooks, PDFs, comics AND audiobooks.
+# Web reader + KOReader/Kobo sync + OPDS + Send-to-Kindle. Replaces calibre-web + AudioBookShelf.
+#
+# Deploy: Portainer -> Stacks -> Add stack -> paste this -> set the Environment variables
+# from .env.example (or use a .env file for `docker compose up -d`). See README.md.
+# Secrets are NEVER committed here — they come from your .env / Portainer env vars.
+
+name: bookorbit
+
+services:
+  app:
+    container_name: bookorbit-app
+    image: ${APP_IMAGE:-ghcr.io/bookorbit/bookorbit:latest}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${APP_PORT:-3000}:${PORT:-3000}"
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-3000}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bookorbit}
+      JWT_SECRET: ${JWT_SECRET:?set in .env}
+      SETUP_BOOTSTRAP_TOKEN: ${SETUP_BOOTSTRAP_TOKEN:?set in .env}
+      APP_URL: ${APP_URL:?set in .env}
+      CLIENT_URL: ${CLIENT_URL:-${APP_URL}}
+      TZ: ${TZ:-America/New_York}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      NODE_MAX_OLD_SPACE_SIZE: ${NODE_MAX_OLD_SPACE_SIZE:-2048}
+      BOOKORBIT_FIX_PERMISSIONS: ${BOOKORBIT_FIX_PERMISSIONS:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${BOOKS_HOST_PATH:-./books}:/books
+      - ${APP_DATA_HOST_PATH:-./data/app}:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+  postgres:
+    container_name: bookorbit-db
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bookorbit}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${DB_DATA_HOST_PATH:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
