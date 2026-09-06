@@ -1,0 +1,11 @@
+{
+  "name": "hardcover-shelfarr-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Requests books from your Hardcover Want to Read shelf via Shelfarr.",
+  "type": "module",
+  "scripts": {
+    "bridge": "node scripts/bridge.mjs",
+    "bridge:dry-run": "node scripts/bridge.mjs --dry-run"
+  }
+}

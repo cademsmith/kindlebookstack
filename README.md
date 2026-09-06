@@ -7,9 +7,13 @@ Self-hosted book stack:
 - **Shelfarr** — an Overseerr-style **request + auto-download** portal for books/audiobooks.
   Searches via **Prowlarr**, grabs via your existing download client (e.g. Transmission),
   and delivers finished files straight into BookOrbit's library folders.
+- **[hardcover-shelfarr-bridge](hardcover-shelfarr-bridge/)** — a small scheduled script that
+  auto-requests books from your Hardcover "Want to Read" shelf via Shelfarr, so new adds show
+  up as download requests without doing it by hand.
 
-**Pipeline:** request in Shelfarr → Prowlarr searches → download client fetches it →
-Shelfarr imports into BookOrbit's `ebooks`/`audiobooks` folders → BookOrbit scans & serves it.
+**Pipeline:** request in Shelfarr (manually, or via the Hardcover bridge) → Prowlarr searches
+→ download client fetches it → Shelfarr imports into BookOrbit's `ebooks`/`audiobooks` folders
+→ BookOrbit scans & serves it.
 
 ## Deploy BookOrbit (Portainer)
 1. **Stacks → + Add stack** → name `bookorbit` → **Web editor** → paste `docker-compose.yml`.
