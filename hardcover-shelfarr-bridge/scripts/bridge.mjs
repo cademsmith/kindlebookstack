@@ -42,7 +42,9 @@ const HARDCOVER_URL = "https://api.hardcover.app/v1/graphql";
 const HARDCOVER_TOKEN = process.env.HARDCOVER_API_TOKEN;
 const SHELFARR_URL = (process.env.SHELFARR_URL || "http://192.168.1.56:5056").replace(/\/$/, "");
 const SHELFARR_TOKEN = process.env.SHELFARR_API_TOKEN;
-const BOOK_TYPES = (process.env.BOOK_TYPES || "ebook").split(",").map((s) => s.trim()).filter(Boolean);
+// Every listed format that's available for a book gets its own request (e.g. both the ebook
+// AND the audiobook when both exist). Order is cosmetic. Override per-user in profiles/<name>.env.
+const BOOK_TYPES = (process.env.BOOK_TYPES || "ebook,audiobook").split(",").map((s) => s.trim()).filter(Boolean);
 const MIN_CONFIDENCE = Number(process.env.MIN_CONFIDENCE || 50);
 const MAX_REQUESTS_PER_RUN = Number(process.env.MAX_REQUESTS_PER_RUN || 15);
 const REQUEST_DELAY_MS = Number(process.env.REQUEST_DELAY_MS || 2000);
@@ -168,12 +170,16 @@ function pickBestMatch(book, results) {
   return null;
 }
 
-function pickBookType(match) {
-  return BOOK_TYPES.find((t) => (match.available_book_types || []).includes(t)) || BOOK_TYPES[0];
+// Formats already really-requested for a book (backward compatible with the old single
+// bookType schema, so existing state.json isn't re-requested wholesale).
+function doneTypesOf(entry) {
+  if (!entry) return new Set();
+  if (Array.isArray(entry.requestedTypes)) return new Set(entry.requestedTypes);
+  if (entry.status === "requested" && !entry.dryRun && entry.bookType) return new Set([entry.bookType]);
+  return new Set();
 }
 
-async function createRequest(match) {
-  const bookType = pickBookType(match);
+async function createRequest(match, bookType) {
   if (DRY_RUN) return { ok: true, dryRun: true, bookType };
 
   const res = await fetch(`${SHELFARR_URL}/api/v1/requests`, {
@@ -213,7 +219,7 @@ async function main() {
   console.log(`${LOG}Fetching Hardcover "Want to Read" list...`);
   const wantToRead = await fetchWantToRead();
   console.log(
-    `Found ${wantToRead.length} books on Want to Read. Requesting book type(s): ${BOOK_TYPES.join(", ")}.` +
+    `${LOG}Found ${wantToRead.length} books on Want to Read. Requesting book type(s): ${BOOK_TYPES.join(", ")}.` +
       (DRY_RUN ? " [DRY RUN — nothing will be sent to Shelfarr]" : "")
   );
 
@@ -225,7 +231,10 @@ async function main() {
 
   for (const book of wantToRead) {
     const key = String(book.hardcoverBookId);
-    if (state[key] && state[key].status === "requested" && !state[key].dryRun) {
+    const done = doneTypesOf(state[key]); // formats already requested for this book
+    const wanted = BOOK_TYPES.filter((t) => !done.has(t)); // formats still to get
+
+    if (!wanted.length) {
       alreadyHandled++;
       continue;
     }
@@ -239,7 +248,7 @@ async function main() {
     try {
       results = await searchShelfarr(book.title);
     } catch (err) {
-      console.log(`  [ERROR] search failed for "${book.title}": ${err.message}`);
+      console.log(`${LOG}  [ERROR] search failed for "${book.title}": ${err.message}`);
       failed++;
       await sleep(SEARCH_DELAY_MS);
       continue;
@@ -248,34 +257,52 @@ async function main() {
 
     const match = pickBestMatch(book, results);
     if (!match) {
-      console.log(`  [SKIP] no confident match for "${book.title}" by ${book.authors.join(", ") || "?"}`);
-      state[key] = { title: book.title, status: "skipped-no-match", checkedAt: new Date().toISOString() };
+      console.log(`${LOG}  [SKIP] no confident match for "${book.title}" by ${book.authors.join(", ") || "?"}`);
+      if (!done.size) state[key] = { title: book.title, status: "skipped-no-match", checkedAt: new Date().toISOString() };
       skippedNoMatch++;
-      await writeState(state);
+      if (!DRY_RUN && !done.size) await writeState(state);
       continue;
     }
 
-    const result = await createRequest(match);
-    if (result.ok) {
+    const available = match.available_book_types || [];
+    const toRequest = wanted.filter((t) => available.includes(t));
+    if (!toRequest.length) {
+      // Found the book, but the still-wanted format(s) aren't available yet — re-check next run.
+      console.log(`${LOG}  [SKIP] "${match.title}" — ${wanted.join("/")} not available (has: ${available.join(", ") || "none"})`);
+      skippedNoMatch++;
+      continue;
+    }
+
+    let anyRequested = false;
+    for (const bookType of toRequest) {
+      if (!DRY_RUN && requestedThisRun >= MAX_REQUESTS_PER_RUN) {
+        cappedRemaining++;
+        break;
+      }
+      const result = await createRequest(match, bookType);
+      if (result.ok) {
+        if (!DRY_RUN) done.add(bookType);
+        anyRequested = true;
+        requestedThisRun++;
+        const tag = DRY_RUN ? "DRY-RUN WOULD REQUEST" : result.alreadyExisted ? "ALREADY REQUESTED" : "REQUESTED";
+        console.log(`${LOG}  [${tag}] "${match.title}" by ${match.author} (${bookType}, confidence ${match.confidence})`);
+      } else {
+        console.log(`${LOG}  [ERROR] request failed for "${match.title}" (${bookType}): HTTP ${result.status} ${result.raw}`);
+        failed++;
+      }
+      if (!DRY_RUN) await sleep(REQUEST_DELAY_MS);
+    }
+
+    if (!DRY_RUN && anyRequested) {
       state[key] = {
         title: book.title,
         status: "requested",
-        bookType: result.bookType,
+        requestedTypes: [...done],
         workId: match.work_id,
-        dryRun: !!result.dryRun,
-        alreadyExisted: !!result.alreadyExisted,
-        requestedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
-      const tag = DRY_RUN ? "DRY-RUN WOULD REQUEST" : result.alreadyExisted ? "ALREADY REQUESTED" : "REQUESTED";
-      console.log(`  [${tag}] "${match.title}" by ${match.author} (${result.bookType}, confidence ${match.confidence})`);
-      requestedThisRun++;
-    } else {
-      console.log(`  [ERROR] request failed for "${match.title}": HTTP ${result.status} ${result.raw}`);
-      failed++;
+      await writeState(state);
     }
-
-    await writeState(state);
-    if (!DRY_RUN) await sleep(REQUEST_DELAY_MS);
   }
 
   console.log(

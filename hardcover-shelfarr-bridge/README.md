@@ -46,6 +46,9 @@ client on the first run. `MAX_REQUESTS_PER_RUN` (default 15) caps new requests p
 Task Scheduler task at it, same pattern as this project's sibling recipe importer.
 
 ## Notes
-- Only requests `BOOK_TYPES` (default `ebook`) — add `audiobook` to also pull those.
+- `BOOK_TYPES` (default `ebook,audiobook`) — for each book it requests **every** listed format
+  that's available, so you get both the ebook and the audiobook when both exist. State is tracked
+  per format, so a format that isn't out yet is re-checked on future runs and never double-requested.
+  Set it to just `ebook` or `audiobook` for a single format (per user, in `profiles/<name>.env`).
 - Shelfarr rejecting a request as already-existing/duplicate is treated as success (marked
   requested, not retried).
