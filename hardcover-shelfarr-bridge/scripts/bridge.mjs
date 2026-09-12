@@ -13,7 +13,7 @@
 //   node scripts/bridge.mjs --dry-run    # show what WOULD be requested, no writes to Shelfarr
 //   node scripts/bridge.mjs --reset      # forget all state (re-evaluate every book from scratch)
 
-import "../lib/env.js";
+import { loadEnv, BASE_ENV } from "../lib/env.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -21,7 +21,22 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "data");
-const STATE_FILE = path.join(DATA_DIR, "state.json");
+const args = process.argv.slice(2);
+
+// --profile <name> (or PROFILE env) runs one user: it loads profiles/<name>.env — a
+// self-contained file with that user's own HARDCOVER_API_TOKEN + SHELFARR_API_TOKEN — and
+// tracks its own data/state.<name>.json so users never clobber each other's progress. With no
+// profile it falls back to the base .env + data/state.json (the original single-user setup),
+// so existing installs keep working unchanged. Run every profile at once with run-all.mjs.
+function flagValue(flag) {
+  const i = args.indexOf(flag);
+  return i !== -1 && args[i + 1] && !args[i + 1].startsWith("--") ? args[i + 1] : null;
+}
+const PROFILE = flagValue("--profile") || process.env.PROFILE || null;
+loadEnv(PROFILE ? path.join(__dirname, "..", "profiles", `${PROFILE}.env`) : BASE_ENV);
+
+const STATE_FILE = path.join(DATA_DIR, PROFILE ? `state.${PROFILE}.json` : "state.json");
+const LOG = PROFILE ? `[${PROFILE}] ` : "";
 
 const HARDCOVER_URL = "https://api.hardcover.app/v1/graphql";
 const HARDCOVER_TOKEN = process.env.HARDCOVER_API_TOKEN;
@@ -36,7 +51,6 @@ const REQUEST_DELAY_MS = Number(process.env.REQUEST_DELAY_MS || 2000);
 // direct Hardcover calls. Throttle between searches to stay well under that.
 const SEARCH_DELAY_MS = Number(process.env.SEARCH_DELAY_MS || 1200);
 
-const args = process.argv.slice(2);
 const DRY_RUN = process.env.DRY_RUN === "true" || args.includes("--dry-run");
 
 function assertEnv() {
@@ -44,7 +58,8 @@ function assertEnv() {
   if (!HARDCOVER_TOKEN) missing.push("HARDCOVER_API_TOKEN");
   if (!SHELFARR_TOKEN) missing.push("SHELFARR_API_TOKEN");
   if (missing.length) {
-    console.error(`Missing required env vars: ${missing.join(", ")}. Copy .env.example to .env and fill them in.`);
+    const where = PROFILE ? `profiles/${PROFILE}.env` : ".env (copy .env.example)";
+    console.error(`${LOG}Missing required env vars: ${missing.join(", ")}. Set them in ${where}.`);
     process.exit(1);
   }
 }
@@ -195,7 +210,7 @@ async function main() {
 
   const state = await readState();
 
-  console.log('Fetching Hardcover "Want to Read" list...');
+  console.log(`${LOG}Fetching Hardcover "Want to Read" list...`);
   const wantToRead = await fetchWantToRead();
   console.log(
     `Found ${wantToRead.length} books on Want to Read. Requesting book type(s): ${BOOK_TYPES.join(", ")}.` +
@@ -264,7 +279,7 @@ async function main() {
   }
 
   console.log(
-    `\nDone. ${requestedThisRun} requested this run, ${alreadyHandled} already handled, ` +
+    `\n${LOG}Done. ${requestedThisRun} requested this run, ${alreadyHandled} already handled, ` +
       `${skippedNoMatch} skipped (no confident match), ${failed} failed` +
       (cappedRemaining ? `, ${cappedRemaining} deferred to next run (MAX_REQUESTS_PER_RUN=${MAX_REQUESTS_PER_RUN})` : "") +
       "."

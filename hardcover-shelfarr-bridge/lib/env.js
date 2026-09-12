@@ -1,13 +1,18 @@
-// Minimal .env loader (no dependency needed). Silently does nothing if .env is absent.
+// Minimal .env loader (no dependency needed).
+// loadEnv(file) reads a KEY=VALUE file into process.env. Real environment variables
+// already set (by the OS/shell) always win — a file never overrides them.
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envPath = path.join(__dirname, "..", ".env");
 
-if (existsSync(envPath)) {
-  const raw = readFileSync(envPath, "utf-8");
+// The base single-user env file (used when no --profile is given).
+export const BASE_ENV = path.join(__dirname, "..", ".env");
+
+export function loadEnv(file) {
+  if (!file || !existsSync(file)) return;
+  const raw = readFileSync(file, "utf-8");
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
